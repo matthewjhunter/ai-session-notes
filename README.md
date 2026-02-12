@@ -29,6 +29,28 @@ transcribe session.opus     # audio input (transcribes directly)
 
 Both scripts are idempotent: if the output file already exists, they print its path and exit.
 
+### `bin/parse-roll20-log`
+
+Parses a saved Roll20 chat log HTML page into timestamped, structured text. Extracts player names, character names, ability/weapon names, and roll results.
+
+```bash
+# Parse entire campaign log
+parse-roll20-log "Chat Log for My Campaign.html" > full-log.txt
+
+# Filter to a single session by date
+parse-roll20-log "Chat Log for My Campaign.html" --session 2026-02-10 > session.txt
+```
+
+To save the HTML: open your Roll20 game, click the chat archive button (speech bubble icon in the chat tab), then save the page (Ctrl+S) as a complete HTML file.
+
+No external Python dependencies required — uses only the standard library. Output format:
+
+```
+[February 10, 2026 9:06PM] nikki: Irulan: longsword (+6): 13 20 10
+[February 10, 2026 9:14PM] Matthew: Bancroft Barleychaser: Light (+3): 7 7
+[February 10, 2026 9:55PM] Matthew: Bancroft Barleychaser: Strength (3): 22 8
+```
+
 ## Dependencies
 
 ### System packages

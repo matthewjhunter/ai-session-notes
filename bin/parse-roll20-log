@@ -1,0 +1,174 @@
+#!/usr/bin/env python3
+"""Parse a Roll20 chat log HTML export into timestamped, structured text.
+
+Usage: parse-roll20-log <chat-log.html> [--session YYYY-MM-DD]
+
+Extracts player names, character names, roll results, and timestamps from
+a saved Roll20 chat archive page. Optionally filters to a single session date.
+
+Output goes to stdout; redirect to a file as needed.
+
+No external dependencies — uses only the Python standard library.
+"""
+
+import argparse
+import re
+import sys
+from datetime import datetime
+from pathlib import Path
+
+
+def extract_date_from_tstamp(tstamp: str):
+    """Extract a date from a Roll20 timestamp like 'February 10, 2026 9:55PM'."""
+    for fmt in ("%B %d, %Y %I:%M%p", "%B %d, %Y %I:%M %p",
+                "%B %d, %Y %I%p", "%B %d, %Y"):
+        try:
+            return datetime.strptime(tstamp.strip(), fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def parse_messages(html: str):
+    """Extract messages using regex on the HTML structure."""
+    # Split on message divs
+    # Each message starts with: <div class="message TYPE" data-messageid="ID">
+    msg_pattern = re.compile(
+        r'<div\s+class="message\s[^"]*"\s[^>]*data-messageid="([^"]*)"[^>]*>(.*?)(?=<div\s+class="message\s|$)',
+        re.DOTALL,
+    )
+
+    # Patterns for extracting fields
+    tstamp_re = re.compile(r'<span\s+class="tstamp"[^>]*>(.*?)</span>')
+    by_re = re.compile(r'<span\s+class="by">(.*?)</span>')
+    # Character name can be in div.sheet-char-name or span.sheet-charname
+    charname_re = re.compile(r'<div\s+class="sheet-char-name">(.*?)</div>', re.DOTALL)
+    charname_span_re = re.compile(r'<span\s+class="sheet-charname">(.*?)</span>')
+    # Roll name can be in div.sheet-roll-name or span.sheet-rollname
+    rollname_re = re.compile(r'<div\s+class="sheet-roll-name">(.*?)</div>', re.DOTALL)
+    rollname_span_re = re.compile(r'<span\s+class="sheet-rollname">(.*?)</span>')
+    roll_result_re = re.compile(
+        r'<span\s+class="inlinerollresult[^"]*?(fullcrit|fullfail)?[^"]*"[^>]*>(.*?)</span>'
+    )
+
+    messages = []
+    for match in msg_pattern.finditer(html):
+        msg_id = match.group(1)
+        body = match.group(2)
+
+        msg = {"id": msg_id, "player": "", "tstamp": "", "parts": []}
+
+        # Timestamp
+        ts_match = tstamp_re.search(body)
+        if ts_match:
+            msg["tstamp"] = ts_match.group(1).strip()
+
+        # Player name
+        by_match = by_re.search(body)
+        if by_match:
+            msg["player"] = re.sub(r"<[^>]+>", "", by_match.group(1)).strip().rstrip(":")
+
+        # Character name (try div.sheet-char-name first, then span.sheet-charname)
+        cn_match = charname_re.search(body)
+        if not cn_match:
+            cn_match = charname_span_re.search(body)
+        if cn_match:
+            cn_text = re.sub(r"<[^>]+>", "", cn_match.group(1)).strip()
+            # Clean up whitespace around colons and parens
+            cn_text = re.sub(r"\s+", " ", cn_text).strip()
+            if not cn_text.endswith(":"):
+                cn_text += ":"
+            msg["parts"].append(cn_text)
+
+        # Roll name (try div.sheet-roll-name first, then span.sheet-rollname)
+        rn_match = rollname_re.search(body)
+        if not rn_match:
+            rn_match = rollname_span_re.search(body)
+        if rn_match:
+            rn_text = re.sub(r"<[^>]+>", "", rn_match.group(1)).strip()
+            rn_text = re.sub(r"\s+", " ", rn_text)
+            msg["parts"].append(rn_text)
+
+        # Roll results
+        for roll_match in roll_result_re.finditer(body):
+            crit_type = roll_match.group(1)
+            val = re.sub(r"<[^>]+>", "", roll_match.group(2)).strip()
+            if crit_type == "fullcrit":
+                msg["parts"].append(f"{val} (CRIT)")
+            elif crit_type == "fullfail":
+                msg["parts"].append(f"{val} (FUMBLE)")
+            else:
+                msg["parts"].append(val)
+
+        # If no structured content, grab general text
+        if not msg["parts"]:
+            text = re.sub(r"<[^>]+>", " ", body)
+            text = re.sub(r"\s+", " ", text).strip()
+            # Remove player name prefix if present
+            if msg["player"]:
+                text = re.sub(
+                    r"^\s*" + re.escape(msg["player"]) + r"\s*:?\s*", "", text
+                )
+            # Remove timestamp prefix
+            if msg["tstamp"]:
+                text = text.replace(msg["tstamp"], "").strip()
+            if text:
+                msg["parts"].append(text)
+
+        messages.append(msg)
+
+    return messages
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Parse Roll20 chat log HTML")
+    parser.add_argument("html_file", help="Saved Roll20 chat log HTML file")
+    parser.add_argument("--session", help="Filter to session date (YYYY-MM-DD)")
+    args = parser.parse_args()
+
+    html_path = Path(args.html_file)
+    if not html_path.exists():
+        print(f"Error: file not found: {html_path}", file=sys.stderr)
+        sys.exit(1)
+
+    print("Parsing HTML...", file=sys.stderr)
+    html = html_path.read_text(encoding="utf-8", errors="replace")
+
+    session_date = None
+    if args.session:
+        session_date = datetime.strptime(args.session, "%Y-%m-%d").date()
+
+    messages = parse_messages(html)
+    print(f"Found {len(messages)} messages", file=sys.stderr)
+
+    last_player = ""
+    last_tstamp = ""
+
+    for msg in messages:
+        if msg["tstamp"]:
+            last_tstamp = msg["tstamp"]
+        if msg["player"]:
+            last_player = msg["player"]
+
+        # Filter by session date
+        if session_date and last_tstamp:
+            msg_date = extract_date_from_tstamp(last_tstamp)
+            if msg_date and msg_date != session_date:
+                continue
+
+        text = " ".join(msg["parts"])
+        if not text:
+            continue
+
+        parts = []
+        if last_tstamp:
+            parts.append(f"[{last_tstamp}]")
+        if last_player:
+            parts.append(f"{last_player}:")
+        parts.append(text)
+
+        print(" ".join(parts))
+
+
+if __name__ == "__main__":
+    main()
