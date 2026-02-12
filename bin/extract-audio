@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -ne 1 ]]; then
+    echo "Usage: extract-audio <video-file>" >&2
+    exit 1
+fi
+
+input="$1"
+
+if [[ ! -f "$input" ]]; then
+    echo "Error: file not found: $input" >&2
+    exit 1
+fi
+
+dir="$(dirname "$input")"
+base="$(basename "$input")"
+name="${base%.*}"
+
+# Probe for audio codec
+codec="$(ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "$input")"
+
+if [[ -z "$codec" ]]; then
+    echo "Error: no audio stream found in $input" >&2
+    exit 1
+fi
+
+# Map codec name to file extension
+declare -A codec_ext=(
+    [aac]=m4a [mp3]=mp3 [opus]=opus [vorbis]=ogg
+    [flac]=flac [pcm_s16le]=wav [pcm_f32le]=wav
+    [alac]=m4a [ac3]=ac3 [eac3]=eac3 [wmav2]=wma
+)
+
+ext="${codec_ext[$codec]:-$codec}"
+output="${dir}/${name}.${ext}"
+
+if [[ -f "$output" ]]; then
+    echo "Already exists: $output"
+    exit 0
+fi
+
+ffmpeg -i "$input" -vn -acodec copy "$output"
+echo "Extracted: $output"

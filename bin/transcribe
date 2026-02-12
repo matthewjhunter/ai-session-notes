@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -ne 1 ]]; then
+    echo "Usage: transcribe <audio-or-video-file>" >&2
+    exit 1
+fi
+
+input="$1"
+
+if [[ ! -f "$input" ]]; then
+    echo "Error: file not found: $input" >&2
+    exit 1
+fi
+
+dir="$(dirname "$input")"
+base="$(basename "$input")"
+name="${base%.*}"
+output="${dir}/${name}.txt"
+
+if [[ -f "$output" ]]; then
+    echo "Already exists: $output"
+    exit 0
+fi
+
+# If the input has a video stream, extract audio first
+if ffprobe -v error -select_streams v -show_entries stream=codec_type -of csv=p=0 "$input" 2>/dev/null | grep -q video; then
+    audio="$(extract-audio "$input" | grep -oP '(?<=(Extracted|Already exists): ).*')"
+    if [[ -z "$audio" || ! -f "$audio" ]]; then
+        echo "Error: extract-audio failed" >&2
+        exit 1
+    fi
+    input="$audio"
+fi
+
+: "${HF_TOKEN:?Set HF_TOKEN for speaker diarization (https://huggingface.co/settings/tokens)}"
+
+~/.local/share/whisperx/bin/whisperx "$input" \
+    --model large-v3 \
+    --device cpu \
+    --compute_type int8 \
+    --diarize \
+    --hf_token "$HF_TOKEN" \
+    --language en \
+    --print_progress True \
+    --output_format txt \
+    --output_dir "$dir"
+
+# whisperx names output after the input basename
+wx_name="$(basename "$input")"
+wx_name="${wx_name%.*}"
+wx_output="${dir}/${wx_name}.txt"
+
+# Rename to match original name if we extracted audio
+if [[ "$wx_name" != "$name" && -f "$wx_output" ]]; then
+    mv "$wx_output" "$output"
+fi
+
+if [[ -f "$output" ]]; then
+    echo "Transcript: $output"
+else
+    echo "Error: expected output not found at $output" >&2
+    exit 1
+fi
