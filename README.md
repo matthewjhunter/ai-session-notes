@@ -136,15 +136,25 @@ Ensure `~/bin` is in your `PATH`.
 
 ## Performance
 
-Tested on a 114-minute D&D session recording (AMD Ryzen AI MAX+ 395, Zen 5, 16 cores):
+Tested on a 114-minute D&D session recording (AMD Ryzen AI MAX+ 395, Zen 5, 16 cores, ROCm 6.2 for diarization):
+
+| Metric | Value |
+|--------|-------|
+| Wall clock (`real`) | ~71 minutes |
+| CPU time (`user`) | ~166 minutes |
+| System time (`sys`) | ~76 minutes |
+
+The high CPU time reflects multi-threaded transcription across 16 cores. The high system time comes from ROCm GPU interaction during diarization and alignment.
+
+Rough phase breakdown:
 
 | Phase | Time |
 |-------|------|
 | Audio extraction | < 5 seconds |
 | Transcription (CPU, int8, large-v3) | ~23 minutes |
-| Diarization | ~5-10 minutes |
+| Alignment + Diarization (ROCm GPU) | ~45 minutes |
 
-NVIDIA GPU users can expect 3-5x faster transcription times.
+NVIDIA GPU users can expect significantly faster times, since both transcription (`faster-whisper` / `ctranslate2`) and diarization can run natively on CUDA.
 
 ## License
 
